@@ -4,16 +4,19 @@ using System.Collections;
 
 public class PlayerMovement : MonoBehaviour
 {
+    [Header("Components")]
+    public TargetLock targetLockScript; // <--- NEW: Link to lock-on system
+
     [Header("Movement Speeds")]
     public float walkSpeed = 5f;
     public float runSpeed = 10f;
     public float crouchSpeed = 2.5f;
-    public float slideSpeed = 5f;       // Tighter slide speed
+    public float slideSpeed = 5f;
     public float rotationSpeed = 100f;
 
     [Header("Durations")]
-    public float slideDuration = 0.3f;  // Shorter, snappier slide
-    public float jumpDelay = 0.2f;      // Delay for standing jump (wind-up)
+    public float slideDuration = 0.3f;
+    public float jumpDelay = 0.2f;
 
     [Header("Physics")]
     public float jumpHeight = 2f;
@@ -36,29 +39,31 @@ public class PlayerMovement : MonoBehaviour
 
     void Start()
     {
+        // <--- NEW: Hide Mouse Cursor for better aim
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+
         animator = GetComponent<Animator>();
         controller = GetComponent<CharacterController>();
+        if (targetLockScript == null) targetLockScript = GetComponent<TargetLock>();
     }
 
     void Update()
     {
-        // Safety check
         if (Keyboard.current == null) return;
 
         isGrounded = controller.isGrounded;
 
-        // --- 0. SLIDING LOGIC (Blocks everything else) ---
+        // --- 0. SLIDING LOGIC ---
         if (isSliding)
         {
-            // While sliding, we FORCE forward movement based on where the character is facing
             Vector3 slideMotion = transform.forward * slideSpeed;
-            slideMotion.y += gravity; // Keep gravity so we don't float
+            slideMotion.y += gravity;
             controller.Move(slideMotion * Time.deltaTime);
-            return; // Stop here! Do not execute the rest of the Update loop.
+            return;
         }
 
-        // --- 1. RUN CANCEL (Crouch -> Run) ---
-        // If holding Shift while crouching, stand up immediately
+        // --- 1. RUN CANCEL ---
         bool shiftPressed = Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
         if (isCrouching && shiftPressed)
         {
@@ -69,17 +74,13 @@ public class PlayerMovement : MonoBehaviour
         // --- 2. CROUCH & SLIDE INPUT ---
         if (Keyboard.current.cKey.wasPressedThisFrame)
         {
-            // Logic: Are we running forward?
             bool isMovingForward = Keyboard.current.wKey.isPressed;
-
-            // If Running (Shift+W) AND not already crouching -> SLIDE
             if (shiftPressed && isMovingForward && !isCrouching)
             {
                 StartCoroutine(SlideSequence());
             }
             else
             {
-                // Otherwise -> Toggle Crouch
                 isCrouching = !isCrouching;
                 if (isCrouching) CrouchDown(); else StandUp();
             }
@@ -87,43 +88,61 @@ public class PlayerMovement : MonoBehaviour
 
         // --- 3. MOVEMENT CALCULATION ---
         float currentSpeed = 0f;
-
-        // Priority: Crouch Speed > Run Speed > Walk Speed
         float targetSpeed = isCrouching ? crouchSpeed : (shiftPressed ? runSpeed : walkSpeed);
 
-        // Move Forward / Backward
+        // Forward / Backward (W / S)
         if (Keyboard.current.wKey.isPressed) currentSpeed = targetSpeed;
         else if (Keyboard.current.sKey.isPressed) currentSpeed = -walkSpeed;
 
-        Vector3 moveVelocity = transform.forward * currentSpeed;
-        controller.Move(moveVelocity * Time.deltaTime);
+        Vector3 finalMove = transform.forward * currentSpeed;
 
-        // Rotate Left / Right
-        float turnDirection = 0f;
-        if (Keyboard.current.aKey.isPressed) turnDirection = -1f;
-        if (Keyboard.current.dKey.isPressed) turnDirection = 1f;
+        // --- 4. ROTATION & STRAFE LOGIC (THE BIG EDIT) ---
+        // Check if we are Locked On
+        if (targetLockScript != null && targetLockScript.isLocked)
+        {
+            // LOCKED MODE: 
+            // 1. Don't rotate manually (TargetLock script forces us to face enemy).
+            // 2. Use A/D to STRAFE (Move Left/Right) instead of turning.
 
-        transform.Rotate(0, turnDirection * rotationSpeed * Time.deltaTime, 0);
+            float strafeInput = 0f;
+            if (Keyboard.current.aKey.isPressed) strafeInput = -1f;
+            if (Keyboard.current.dKey.isPressed) strafeInput = 1f;
 
-        // --- 4. JUMPING ---
-        // We only jump if grounded, not already jumping, and NOT crouching
+            // Add Strafe velocity to Forward velocity
+            Vector3 strafeMove = transform.right * strafeInput * (isCrouching ? crouchSpeed : walkSpeed);
+            finalMove += strafeMove;
+        }
+        else
+        {
+            // NORMAL MODE (Your Original Code):
+            // Use A/D to ROTATE the character.
+
+            float turnDirection = 0f;
+            if (Keyboard.current.aKey.isPressed) turnDirection = -1f;
+            if (Keyboard.current.dKey.isPressed) turnDirection = 1f;
+
+            transform.Rotate(0, turnDirection * rotationSpeed * Time.deltaTime, 0);
+        }
+
+        // Apply Movement
+        controller.Move(finalMove * Time.deltaTime);
+
+        // --- 5. JUMPING ---
         if (Keyboard.current.spaceKey.wasPressedThisFrame && isGrounded && !isJumping && !isCrouching)
         {
             StartCoroutine(JumpSequence());
         }
 
-        // --- 5. GRAVITY ---
-        // If on ground, keep velocity slightly negative to stick to floor
+        // --- 6. GRAVITY ---
         if (isGrounded && velocity.y < 0 && !isJumping) velocity.y = -2f;
-
         velocity.y += gravity * Time.deltaTime;
         controller.Move(velocity * Time.deltaTime);
 
-        // --- 6. ANIMATOR UPDATE ---
-        animator.SetFloat("Speed", Mathf.Abs(currentSpeed));
+        // --- 7. ANIMATOR UPDATE ---
+        animator.SetFloat("Speed", currentSpeed);
     }
 
-    // --- HELPER FUNCTIONS ---
+    // --- HELPER FUNCTIONS (UNCHANGED) ---
 
     void CrouchDown()
     {
@@ -142,35 +161,21 @@ public class PlayerMovement : MonoBehaviour
     IEnumerator SlideSequence()
     {
         isSliding = true;
-
-        // Trigger Animation
         animator.SetTrigger("Slide");
-
-        // Shrink Collider immediately
         CrouchDown();
-
-        // Wait for the slide duration
         yield return new WaitForSeconds(slideDuration);
-
-        // Stop sliding state (but stay crouched)
         isSliding = false;
     }
 
     IEnumerator JumpSequence()
     {
         isJumping = true;
-
-        // Dynamic Delay: No delay if we are running!
         float currentSpeed = animator.GetFloat("Speed");
         float actualDelay = (currentSpeed > 0.1f) ? 0f : jumpDelay;
-
         animator.SetTrigger("Jump");
-
         if (actualDelay > 0) yield return new WaitForSeconds(actualDelay);
-
         velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
-        yield return new WaitForSeconds(0.1f); // Short cooldown
-
+        yield return new WaitForSeconds(0.1f);
         isJumping = false;
     }
 }

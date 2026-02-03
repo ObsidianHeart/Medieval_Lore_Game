@@ -23,7 +23,18 @@ public class Health : MonoBehaviour
 
     void Die()
     {
-        Debug.Log("Character Died!");
-        // Add death animation logic here later
+        Debug.Log(name + " died!");
+
+        // Check if this is the Player
+        if (gameObject.CompareTag("Player"))
+        {
+            // If the Player dies, we usually reload the scene, but for now just log it
+            Debug.Log("GAME OVER! (Player would restart here)");
+        }
+        else
+        {
+            // If it's an Enemy, DELETE him instantly
+            Destroy(gameObject);
+        }
     }
 }
